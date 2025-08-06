@@ -2,6 +2,7 @@ import { useState } from 'react';
 import Modal from '../ui/Modal';
 import TaskForm from './TaskForm';
 import Button from '../ui/Button';
+import PropTypes from 'prop-types';
 
 const TaskDetails = ({ task, users, onUpdate, onDelete }) => {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);

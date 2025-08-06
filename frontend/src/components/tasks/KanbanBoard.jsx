@@ -1,5 +1,6 @@
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 import Card from '../ui/Card';
+import PropTypes from 'prop-types';
 
 const statusColumns = {
   'pending': 'Pending',

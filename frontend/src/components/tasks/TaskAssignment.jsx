@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import Dropdown from '../ui/Dropdown';
 import Button from '../ui/Button';
+import PropTypes from 'prop-types';
 
 const TaskAssignment = ({ task, users, onAssign }) => {
   const [assignee, setAssignee] = useState(task.assignee || '');

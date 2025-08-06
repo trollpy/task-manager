@@ -2,6 +2,7 @@ import { useState } from 'react';
 import TaskCard from './TaskCard';
 import TaskFilters from './TaskFilters';
 import Button from '../ui/Button';
+import PropTypes from 'prop-types';
 
 const TaskList = ({ tasks }) => {
   const [filteredTasks, setFilteredTasks] = useState(tasks);

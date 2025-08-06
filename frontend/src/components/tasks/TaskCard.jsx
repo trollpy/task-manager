@@ -1,4 +1,5 @@
 import Badge from '../ui/Badge';
+import PropTypes from 'prop-types';
 
 const priorityColors = {
   'High': 'red',

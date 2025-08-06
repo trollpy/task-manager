@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import Dropdown from '../ui/Dropdown';
+import PropTypes from 'prop-types';
 
 const TaskFilters = ({ onFilterChange }) => {
   const [filters, setFilters] = useState({

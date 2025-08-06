@@ -1,124 +1,369 @@
-import asyncHandler from 'express-async-handler'
-import Task from '../models/Task.js'
-import User from '../models/User.js'
-import { OpenAI } from 'openai'
-import { sendEmail } from '../services/emailService.js'
-import { io } from '../server.js'
+import Task from '../models/Task.js';
+import User from '../models/User.js';
+import AuditLog from '../models/AuditLog.js';
+import { sendNotification } from '../services/notificationService.js';
 
-const openai = new OpenAI(process.env.OPENAI_API_KEY)
-
-// @desc    Get all tasks
-// @route   GET /api/tasks
-// @access  Private
-export const getTasks = asyncHandler(async (req, res) => {
-  const { status, priority, assignee, dueDate } = req.query
-  const query = { organization: req.user.organization }
-
-  if (status) query.status = status
-  if (priority) query.priority = priority
-  if (assignee) query.assignee = assignee
-  if (dueDate) query.dueDate = { $lte: new Date(dueDate) }
-
-  // RBAC: Managers can only see their team's tasks
-  if (req.user.role === 'manager') {
-    query.$or = [
-      { assignee: req.user._id },
-      { createdBy: req.user._id }
-    ]
-  }
-
-  const tasks = await Task.find(query)
-    .populate('assignee', 'name email avatar')
-    .populate('createdBy', 'name email')
-    .sort('-createdAt')
-
-  res.json(tasks)
-})
-
-// @desc    Create new task with AI suggestions
-// @route   POST /api/tasks
-// @access  Private (Admin/Manager)
-export const createTask = asyncHandler(async (req, res) => {
-  const { assignee } = req.body
-  
-  // Verify assignee belongs to same organization
-  const assigneeUser = await User.findOne({
-    _id: assignee,
-    organization: req.user.organization
-  })
-  
-  if (!assigneeUser) {
-    res.status(400)
-    throw new Error('Invalid assignee')
-  }
-
-  const task = await Task.create({
-    ...req.body,
-    organization: req.user.organization,
-    createdBy: req.user._id
-  })
-
-  // Get AI suggestions for similar tasks
-  const aiSuggestions = await getAITaskSuggestions(task)
-
-  // Send real-time notification
-  io.to(assigneeUser._id.toString()).emit('new-task', task)
-
-  // Send email notification
-  await sendTaskAssignmentEmail(assigneeUser, task)
-
-  res.status(201).json({
-    ...task.toObject(),
-    aiSuggestions
-  })
-})
-
-// AI-powered task suggestions
-const getAITaskSuggestions = async (task) => {
+export const getTasks = async (req, res, next) => {
   try {
-    const similarTasks = await Task.find({
-      title: { $regex: task.title, $options: 'i' },
-      organization: task.organization
-    }).limit(5)
+    const tasks = await Task.find({ organization: req.user.organization })
+      .populate('assignee', 'name email')
+      .populate('createdBy', 'name');
 
-    const prompt = `
-      Based on this new task: "${task.title} - ${task.description}",
-      and these similar historical tasks: ${JSON.stringify(similarTasks)},
-      provide 3 suggestions for:
-      1. Potential pitfalls to avoid
-      2. Recommended resources
-      3. Estimated optimal timeline
-      
-      Format as a JSON object with these keys: pitfalls, resources, timeline
-    `
-
-    const response = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.7
-    })
-
-    return JSON.parse(response.choices[0].message.content)
-  } catch (error) {
-    console.error('AI suggestion error:', error)
-    return null
+    res.status(200).json({
+      success: true,
+      count: tasks.length,
+      data: tasks
+    });
+  } catch (err) {
+    next(err);
   }
-}
+};
 
-const sendTaskAssignmentEmail = async (user, task) => {
-  const subject = `New Task Assigned: ${task.title}`
-  const html = `
-    <h2>You've been assigned a new task</h2>
-    <p><strong>Title:</strong> ${task.title}</p>
-    <p><strong>Priority:</strong> ${task.priority}</p>
-    <p><strong>Due Date:</strong> ${task.dueDate.toDateString()}</p>
-    <p>Please log in to SmartTasker to view and accept this task.</p>
-    <a href="${process.env.FRONTEND_URL}/tasks/${task._id}">View Task</a>
-  `
+export const getTask = async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id)
+      .populate('assignee', 'name email')
+      .populate('createdBy', 'name')
+      .populate('organization', 'name');
 
-  await sendEmail({
-    to: user.email,
-    subject,
-    html
-  })
-}
+    if (!task) {
+      return res.status(404).json({ success: false, message: 'Task not found' });
+    }
+
+    if (task.organization.toString() !== req.user.organization.toString()) {
+      return res.status(401).json({ success: false, message: 'Not authorized' });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: task
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const createTask = async (req, res, next) => {
+  try {
+    req.body.organization = req.user.organization;
+    req.body.createdBy = req.user.id;
+
+    const task = await Task.create(req.body);
+    const populatedTask = await Task.findById(task._id).populate('assignee', 'name email');
+
+    if (populatedTask.assignee) {
+      await sendNotification({
+        userId: populatedTask.assignee._id,
+        title: 'New Task Assigned',
+        message: `You have been assigned a new task: ${task.title}`,
+        type: 'task_assigned'
+      });
+    }
+
+    await AuditLog.create({
+      action: 'Create Task',
+      entity: 'Task',
+      entityId: task._id,
+      performedBy: req.user.id,
+      organization: req.user.organization,
+      details: `Created task "${task.title}"`
+    });
+
+    res.status(201).json({
+      success: true,
+      data: task
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const updateTask = async (req, res, next) => {
+  try {
+    let task = await Task.findById(req.params.id);
+
+    if (!task) {
+      return res.status(404).json({ success: false, message: 'Task not found' });
+    }
+
+    if (task.organization.toString() !== req.user.organization.toString()) {
+      return res.status(401).json({ success: false, message: 'Not authorized' });
+    }
+
+    const assigneeChanged = req.body.assignee && req.body.assignee !== task.assignee.toString();
+
+    task = await Task.findByIdAndUpdate(req.params.id, req.body, {
+      new: true,
+      runValidators: true
+    }).populate('assignee', 'name email');
+
+    if (assigneeChanged && task.assignee) {
+      await sendNotification({
+        userId: task.assignee._id,
+        title: 'Task Reassigned',
+        message: `You have been assigned a task: ${task.title}`,
+        type: 'task_assigned'
+      });
+    }
+
+    await AuditLog.create({
+      action: 'Update Task',
+      entity: 'Task',
+      entityId: task._id,
+      performedBy: req.user.id,
+      organization: req.user.organization,
+      details: `Updated task "${task.title}"`
+    });
+
+    res.status(200).json({
+      success: true,
+      data: task
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const deleteTask = async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id);
+
+    if (!task) {
+      return res.status(404).json({ success: false, message: 'Task not found' });
+    }
+
+    if (task.organization.toString() !== req.user.organization.toString()) {
+      return res.status(401).json({ success: false, message: 'Not authorized' });
+    }
+
+    await task.deleteOne();
+
+    await AuditLog.create({
+      action: 'Delete Task',
+      entity: 'Task',
+      entityId: task._id,
+      performedBy: req.user.id,
+      organization: req.user.organization,
+      details: `Deleted task "${task.title}"`
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {}
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const assignTask = async (req, res, next) => {
+  try {
+    const { userId } = req.body;
+
+    const assignee = await User.findOne({
+      _id: userId,
+      organization: req.user.organization
+    });
+
+    if (!assignee) {
+      return res.status(404).json({ success: false, message: 'User not found in organization' });
+    }
+
+    let task = await Task.findById(req.params.taskId);
+
+    if (!task) {
+      return res.status(404).json({ success: false, message: 'Task not found' });
+    }
+
+    if (task.organization.toString() !== req.user.organization.toString()) {
+      return res.status(401).json({ success: false, message: 'Not authorized' });
+    }
+
+    task.assignee = userId;
+    task.status = 'Pending'; 
+    task = await task.save();
+
+    const populatedTask = await Task.findById(task._id).populate('assignee', 'name email');
+
+    await sendNotification({
+      userId: populatedTask.assignee._id,
+      title: 'Task Assigned',
+      message: `You have been assigned a task: ${task.title}`,
+      type: 'task_assigned'
+    });
+
+    await AuditLog.create({
+      action: 'Assign Task',
+      entity: 'Task',
+      entityId: task._id,
+      performedBy: req.user.id,
+      organization: req.user.organization,
+      details: `Assigned task "${task.title}" to ${assignee.name}`
+    });
+
+    res.status(200).json({
+      success: true,
+      data: task
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const updateTaskStatus = async (req, res, next) => {
+  try {
+    const { status } = req.body;
+
+    let task = await Task.findById(req.params.taskId);
+
+    if (!task) {
+      return res.status(404).json({ success: false, message: 'Task not found' });
+    }
+
+    if (task.organization.toString() !== req.user.organization.toString()) {
+      return res.status(401).json({ success: false, message: 'Not authorized' });
+    }
+
+    if (task.assignee.toString() !== req.user.id && !['Admin', 'Manager'].includes(req.user.role)) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Not authorized to update this task' 
+      });
+    }
+
+    task.status = status;
+    task = await task.save();
+
+    if (task.createdBy.toString() !== req.user.id) {
+      await sendNotification({
+        userId: task.createdBy,
+        title: 'Task Status Updated',
+        message: `Task "${task.title}" status changed to ${status}`,
+        type: 'task_updated'
+      });
+    }
+
+    await AuditLog.create({
+      action: 'Update Task Status',
+      entity: 'Task',
+      entityId: task._id,
+      performedBy: req.user.id,
+      organization: req.user.organization,
+      details: `Changed status to ${status} for task "${task.title}"`
+    });
+
+    res.status(200).json({
+      success: true,
+      data: task
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const getMyTasks = async (req, res, next) => {
+  try {
+    const tasks = await Task.find({ assignee: req.user.id })
+      .populate('createdBy', 'name')
+      .populate('organization', 'name');
+
+    res.status(200).json({
+      success: true,
+      count: tasks.length,
+      data: tasks
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// --- Missing route handlers required by your routes ---
+
+export const acceptTask = async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id);
+    if (!task) return res.status(404).json({ success: false, message: 'Task not found' });
+
+    if (task.organization.toString() !== req.user.organization.toString()) {
+      return res.status(401).json({ success: false, message: 'Not authorized' });
+    }
+
+    if (task.assignee.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Only assignee can accept the task' });
+    }
+
+    task.status = 'Accepted';
+    await task.save();
+
+    res.status(200).json({ success: true, data: task });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const rejectTask = async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id);
+    if (!task) return res.status(404).json({ success: false, message: 'Task not found' });
+
+    if (task.organization.toString() !== req.user.organization.toString()) {
+      return res.status(401).json({ success: false, message: 'Not authorized' });
+    }
+
+    if (task.assignee.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Only assignee can reject the task' });
+    }
+
+    task.status = 'Rejected';
+    await task.save();
+
+    res.status(200).json({ success: true, data: task });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const uploadFiles = async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id);
+    if (!task) return res.status(404).json({ success: false, message: 'Task not found' });
+
+    if (task.organization.toString() !== req.user.organization.toString()) {
+      return res.status(401).json({ success: false, message: 'Not authorized' });
+    }
+
+    task.files = task.files || [];
+
+    req.files.forEach(file => {
+      task.files.push({
+        filename: file.filename,
+        originalname: file.originalname,
+        mimetype: file.mimetype,
+        size: file.size,
+        path: file.path,
+        uploadedAt: new Date()
+      });
+    });
+
+    await task.save();
+
+    res.status(200).json({ success: true, data: task.files });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const getTaskFiles = async (req, res, next) => {
+  try {
+    const task = await Task.findById(req.params.id);
+    if (!task) return res.status(404).json({ success: false, message: 'Task not found' });
+
+    if (task.organization.toString() !== req.user.organization.toString()) {
+      return res.status(401).json({ success: false, message: 'Not authorized' });
+    }
+
+    res.status(200).json({ success: true, data: task.files || [] });
+  } catch (err) {
+    next(err);
+  }
+};

@@ -5,6 +5,7 @@ import Input from '../ui/Input';
 import Button from '../ui/Button';
 import FileUpload from '../ui/FileUpload';
 
+
 const CompanySetup = () => {
   const [companyName, setCompanyName] = useState('');
   const [logo, setLogo] = useState(null);

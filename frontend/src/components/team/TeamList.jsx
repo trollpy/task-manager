@@ -1,5 +1,6 @@
 import Card from '../ui/Card';
 import Badge from '../ui/Badge';
+import PropTypes from 'prop-types';
 
 const roleColors = {
   'Admin': 'red',

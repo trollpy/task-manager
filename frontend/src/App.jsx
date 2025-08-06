@@ -13,6 +13,7 @@ import Reports from './pages/Reports'
 import Settings from './pages/Settings'
 import NotFound from './pages/NotFound'
 import LoadingSpinner from './components/ui/LoadingSpinner'
+import CompanySetup from './components/auth/CompanySetup' // ✅ import added
 
 function App() {
   const { user, loading } = useAuth()
@@ -31,6 +32,10 @@ function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        
+        {/* ✅ company-setup accessible without auth */}
+        <Route path="/company-setup" element={<CompanySetup />} />
+
         <Route path="/" element={
           <ProtectedRoute>
             <Layout />
@@ -42,6 +47,7 @@ function App() {
           <Route path="reports" element={<Reports />} />
           <Route path="settings" element={<Settings />} />
         </Route>
+
         <Route path="*" element={<NotFound />} />
       </Routes>
     </div>

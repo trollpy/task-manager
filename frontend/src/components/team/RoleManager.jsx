@@ -2,6 +2,7 @@ import { useState } from 'react';
 import Card from '../ui/Card';
 import Dropdown from '../ui/Dropdown';
 import Button from '../ui/Button';
+import PropTypes from 'prop-types';
 
 const RoleManager = ({ user, roles, onRoleUpdate }) => {
   const [selectedRole, setSelectedRole] = useState(user.role);

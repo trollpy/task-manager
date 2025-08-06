@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import Input from '../ui/Input';
 import Button from '../ui/Button';
+import PropTypes from 'prop-types';
 
 const SubtaskManager = ({ subtasks, onSubtaskUpdate }) => {
   const [newSubtask, setNewSubtask] = useState('');

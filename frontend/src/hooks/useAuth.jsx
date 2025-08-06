@@ -1,4 +1,4 @@
-import { useState, useContext, createContext } from 'react';
+import { useState, useEffect, useContext, createContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 const AuthContext = createContext();
@@ -7,6 +7,25 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
+
+  // Initialize auth state
+  useEffect(() => {
+    const initializeAuth = async () => {
+      try {
+        // Check for existing session/token
+        const savedUser = localStorage.getItem('user');
+        if (savedUser) {
+          setUser(JSON.parse(savedUser));
+        }
+      } catch (error) {
+        console.error('Failed to initialize auth:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    initializeAuth();
+  }, []);
 
   const login = async (email, password) => {
     setLoading(true);
@@ -21,6 +40,7 @@ export const AuthProvider = ({ children }) => {
         organizationId: 'org123'
       };
       setUser(mockUser);
+      localStorage.setItem('user', JSON.stringify(mockUser));
       navigate('/');
     } catch (error) {
       throw new Error('Invalid credentials');
@@ -42,6 +62,7 @@ export const AuthProvider = ({ children }) => {
         organizationId: null // No org until setup
       };
       setUser(mockUser);
+      localStorage.setItem('user', JSON.stringify(mockUser));
       navigate('/company-setup');
     } catch (error) {
       throw new Error('Registration failed');
@@ -55,10 +76,12 @@ export const AuthProvider = ({ children }) => {
     try {
       // Simulate API call
       await new Promise(resolve => setTimeout(resolve, 1000));
-      setUser(prev => ({
-        ...prev,
+      const updatedUser = {
+        ...user,
         organizationId: 'org123'
-      }));
+      };
+      setUser(updatedUser);
+      localStorage.setItem('user', JSON.stringify(updatedUser));
       navigate('/');
     } catch (error) {
       throw new Error('Company setup failed');
@@ -69,25 +92,30 @@ export const AuthProvider = ({ children }) => {
 
   const logout = () => {
     setUser(null);
+    localStorage.removeItem('user');
     navigate('/login');
   };
 
+  const value = {
+    user,
+    loading,
+    login,
+    register,
+    setupCompany,
+    logout
+  };
+
   return (
-    <AuthContext.Provider 
-      value={{ 
-        user, 
-        loading, 
-        login, 
-        register, 
-        setupCompany, 
-        logout 
-      }}
-    >
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );
 };
 
 export const useAuth = () => {
-  return useContext(AuthContext);
+  const context = useContext(AuthContext);
+  if (context === undefined) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
 };
